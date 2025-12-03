@@ -1,139 +1,158 @@
-from fastapi import FastAPI, HTTPException
-from fastapi.responses import StreamingResponse
-from pydantic import BaseModel
-from typing import List, Dict, Any
+#!/usr/bin/env python3
+"""
+远程MCP服务器 - 下载报表工具
+
+这个MCP服务帮助用户下载CSV数据报表。
+支持根据日期下载销售报表。
+"""
+
+import json
+import asyncio
+from typing import Any
 import base64
 import re
-import asyncio
-import json
+from mcp.server import Server
+from mcp.server.models import InitializationOptions
+import mcp.types as types
+from mcp.server import NotificationOptions
+import mcp.server.stdio
 
-app = FastAPI(title="Remote MCP Server")
+# 创建服务器实例
+server = Server("remote-report-server")
 
-# MCP协议相关模型
-class ToolParam(BaseModel):
-    type: str
-    description: str = None
 
-class Tool(BaseModel):
-    name: str
-    description: str
-    parameters: Dict[str, ToolParam]
-
-class ToolCall(BaseModel):
-    tool: str
-    params: Dict[str, Any]
-
-class ContentItem(BaseModel):
-    type: str
-    text: str = None
-    file: Dict[str, Any] = None
-
-class ToolResponse(BaseModel):
-    content: List[ContentItem]
-
-# 工具定义
-TOOLS = {
-    "downloadReport": {
-        "description": "下载指定日期的销售报表",
-        "parameters": {
-            "date": {
-                "type": "string",
-                "description": "报表日期，格式为YYYY-MM-DD"
+@server.list_tools()
+async def handle_list_tools() -> list[types.Tool]:
+    """
+    列出可用的工具。
+    
+    提供downloadReport工具，用于下载指定日期的销售报表。
+    """
+    return [
+        types.Tool(
+            name="downloadReport",
+            description="下载指定日期的销售报表",
+            inputSchema={
+                "type": "object",
+                "properties": {
+                    "date": {
+                        "type": "string",
+                        "description": "报表日期，格式为YYYY-MM-DD",
+                        "pattern": "^\\d{4}-\\d{2}-\\d{2}$"
+                    }
+                },
+                "required": ["date"]
             }
-        }
-    }
-}
+        )
+    ]
 
-@app.get("/mcp/tools")
-def get_tools():
-    """获取可用工具列表"""
-    return {"tools": TOOLS}
 
-@app.post("/mcp/call")
-def call_tool(tool_call: ToolCall):
-    """调用工具"""
-    tool_name = tool_call.tool
-    params = tool_call.params
+@server.call_tool()
+async def handle_call_tool(
+    name: str, arguments: dict | None
+) -> list[types.TextContent]:
+    """
+    处理工具调用。
     
-    if tool_name not in TOOLS:
-        raise HTTPException(status_code=404, detail=f"Tool {tool_name} not found")
-    
-    if tool_name == "downloadReport":
-        date = params.get("date")
-        if not date:
-            return ToolResponse(
-                content=[
-                    ContentItem(type="text", text="错误：缺少日期参数")
-                ]
+    根据工具名称处理不同的工具调用，返回相应的内容。
+    """
+    if not arguments:
+        return [
+            types.TextContent(
+                type="text",
+                text="错误：缺少工具参数"
             )
+        ]
+    
+    if name == "downloadReport":
+        # 下载报表
+        date = arguments.get("date")
+        
+        if not date:
+            return [
+                types.TextContent(
+                    type="text",
+                    text="错误：缺少日期参数"
+                )
+            ]
         
         # 验证日期格式
         date_regex = r"^\d{4}-\d{2}-\d{2}$"
         if not re.match(date_regex, date):
-            return ToolResponse(
-                content=[
-                    ContentItem(type="text", text="错误：日期格式无效，请使用YYYY-MM-DD格式")
-                ]
-            )
-        
-        # 生成模拟报表内容
-        report_content = f"日期: {date}\n\n销售报表\n\n产品名称,销售额\n产品A,1000.00\n产品B,2000.00\n产品C,1500.00\n\n总计,4500.00"
-        
-        # 创建报表文件的Base64编码
-        base64_content = base64.b64encode(report_content.encode()).decode()
-        
-        # 返回包含文件的响应
-        return ToolResponse(
-            content=[
-                ContentItem(
-                    type="file",
-                    file={
-                        "name": f"report-{date}.csv",
-                        "mimeType": "text/csv",
-                        "content": base64_content,
-                        "encoding": "base64"
-                    }
-                ),
-                ContentItem(
+            return [
+                types.TextContent(
                     type="text",
-                    text=f"已生成{date}的销售报表"
+                    text="错误：日期格式无效，请使用YYYY-MM-DD格式"
                 )
             ]
-        )
-    
-    return ToolResponse(
-        content=[
-            ContentItem(type="text", text=f"Tool {tool_name} called with params: {params}")
-        ]
-    )
-
-@app.get("/")
-def root():
-    """根路径"""
-    return {"message": "Remote MCP Server is running"}
-
-# SSE端点支持
-@app.get("/sse")
-async def sse_endpoint():
-    """SSE连接端点"""
-    async def event_generator():
-        # 发送初始连接确认
-        yield f'data: {json.dumps({"type": "connected", "message": "SSE connected"})}\n\n'
         
-        # 保持连接
-        while True:
-            await asyncio.sleep(30)  # 每30秒发送一次心跳
-            yield f'data: {json.dumps({"type": "heartbeat"})}\n\n'
+        try:
+            # 生成模拟报表内容
+            report_content = f"日期: {date}\n\n销售报表\n\n产品名称,销售额\n产品A,1000.00\n产品B,2000.00\n产品C,1500.00\n\n总计,4500.00"
+            
+            # 创建报表文件的Base64编码
+            base64_content = base64.b64encode(report_content.encode()).decode()
+            
+            # 返回包含文件信息的响应
+            return [
+                types.TextContent(
+                    type="text",
+                    text=f"已生成{date}的销售报表\n\n" +
+                          f"文件名: report-{date}.csv\n" +
+                          f"文件类型: text/csv\n" +
+                          f"文件内容(BASE64): {base64_content}"
+                )
+            ]
+        except Exception as e:
+            return [
+                types.TextContent(
+                    type="text",
+                    text=f"生成报表失败: {str(e)}"
+                )
+            ]
     
-    return StreamingResponse(event_generator(), media_type="text/event-stream")
+    else:
+        return [
+            types.TextContent(
+                type="text",
+                text=f"未知工具: {name}"
+            )
+        ]
 
-@app.post("/sse/message")
-async def sse_message(message: Dict[str, Any]):
-    """SSE消息端点"""
-    # 这里可以添加消息处理逻辑
-    return {"status": "received", "message": message}
+
+async def main():
+    """运行服务器"""
+    print("启动远程MCP服务器...")
+    print("使用stdio模式，通过管道进行通信")
+    print("\n可用工具:")
+    print("- downloadReport: 下载指定日期的销售报表")
+    print("\n示例调用:")
+    print('{"jsonrpc": "2.0", "id": "1", "method": "listTools"}')
+    print('{"jsonrpc": "2.0", "id": "2", "method": "callTool", "params": {"name": "downloadReport", "arguments": {"date": "2025-12-04"}}}}')
+    
+    # 初始化服务器选项
+    init_options = InitializationOptions(
+        server_name="remote-report-server",
+        server_version="1.0.0",
+        capabilities=server.get_capabilities(
+            notification_options=NotificationOptions(),
+            experimental_capabilities={},
+        ),
+    )
+    
+    try:
+        # 使用stdio运行服务器
+        async with mcp.server.stdio.stdio_server() as (read_stream, write_stream):
+            await server.run(
+                read_stream,
+                write_stream,
+                init_options,
+            )
+    except KeyboardInterrupt:
+        print("\n服务器正在关闭...")
+    except Exception as e:
+        print(f"服务器运行失败: {str(e)}")
+
 
 if __name__ == "__main__":
-    import uvicorn
-    import json
-    uvicorn.run(app, host="0.0.0.0", port=8000)
+    asyncio.run(main())
