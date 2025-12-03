@@ -1,0 +1,17 @@
+{
+  "mcpServers": {
+    "remoteReportServer": {
+      "url": "http://localhost:8000/mcp",
+      "description": "远程销售报表MCP服务器",
+      "auth": {
+        "type": "none"
+      },
+      "tools": {
+        "downloadReport": {
+          "enabled": true,
+          "description": "下载指定日期的销售报表"
+        }
+      }
+    }
+  }
+}
